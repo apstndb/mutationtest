@@ -22,6 +22,9 @@ func run(ctx context.Context) error {
 	project := flag.String("project", "", "")
 	instance := flag.String("instance", "", "")
 	database := flag.String("database", "", "")
+
+	batchCount := flag.Int("batch-count", 40000, "")
+	batchSize := flag.Int("batch-size", 1, "")
 	flag.Parse()
 
 	databaseStr := fmt.Sprintf("projects/%s/instances/%s/databases/%s", *project, *instance, *database)
@@ -40,33 +43,18 @@ func run(ctx context.Context) error {
 	}
 
 	{
-		resp, err := cli.ReadWriteTransactionWithOptions(ctx, func(ctx context.Context, transaction *spanner.ReadWriteTransaction) error {
+		var mutationGroups []*spanner.MutationGroup
+		for iBatchCount := 0; iBatchCount < *batchCount; iBatchCount++ {
 			var mutations []*spanner.Mutation
-			for i := 0; i < 20001; i++ {
-				mut, err := spanner.InsertOrUpdateStruct("MutationTest", TableRow{PK: uuid.NewString(), Col: int64(i)})
+			for iBatchSize := 0; iBatchSize < *batchSize; iBatchSize++ {
+				mut, err := spanner.InsertOrUpdateStruct("MutationTest", TableRow{PK: uuid.NewString(), Col: int64(iBatchCount)})
+				// mut, err := spanner.InsertStruct("MutationTest", TableRow{PK: "foo", Col: int64(i)})
 				if err != nil {
 					return err
 				}
 				mutations = append(mutations, mut)
 			}
-			return transaction.BufferWrite(mutations)
-		}, spanner.TransactionOptions{CommitOptions: spanner.CommitOptions{ReturnCommitStats: true}})
-		if err != nil {
-			log.Printf("Apply failed resp: %v, err: %v", resp, err)
-		} else {
-			log.Printf("Apply success resp: %v", resp)
-		}
-	}
-
-	{
-		var mutationGroups []*spanner.MutationGroup
-		for i := 0; i < 20001; i++ {
-			mut, err := spanner.InsertOrUpdateStruct("MutationTest", TableRow{PK: uuid.NewString(), Col: int64(i)})
-			// mut, err := spanner.InsertStruct("MutationTest", TableRow{PK: "foo", Col: int64(i)})
-			if err != nil {
-				return err
-			}
-			mutationGroups = append(mutationGroups, &spanner.MutationGroup{Mutations: []*spanner.Mutation{mut}})
+			mutationGroups = append(mutationGroups, &spanner.MutationGroup{Mutations: mutations})
 		}
 
 		it := cli.BatchWrite(ctx, mutationGroups)
@@ -80,6 +68,7 @@ func run(ctx context.Context) error {
 				failCount += len(r.GetIndexes())
 				log.Println(st)
 			} else {
+				log.Printf("len(Indexes): %d, CommitTimestamp: %v", len(r.GetIndexes()), r.GetCommitTimestamp().AsTime())
 				successBatchCount++
 				successCount += len(r.GetIndexes())
 			}
